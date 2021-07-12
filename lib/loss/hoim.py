@@ -96,12 +96,9 @@ class HOIMLoss(nn.Module):
         self.momentum = oim_momentum
         self.omega_decay = omega_decay
         self.oim_scalar = oim_scalar
-        # self.oim_scalar =  math.sqrt(2) * math.log(num_pids - 1)
         self.dynamic_lambda = dynamic_lambda
-        # self.m1 = nn.Parameter(torch.tensor(0.9))
-        # self.m2 = nn.Parameter(torch.tensor(0.1))
+
         self.m1 = 0.9
-        # self.m2 = -0.1
         self.m2 = 0.003
         
 
@@ -127,14 +124,7 @@ class HOIMLoss(nn.Module):
 
     def build_det_loss(self, all_probs, roi_label=None):
         if self.training:
-            # import ipdb; ipdb.set_trace()
             label = roi_label.squeeze().clamp(0, 1)  # background label = 0
-            # epsion = 0.1 / self.num_pids
-            # zero = torch.ones_like(label)*epsion
-            # one = torch.ones_like(label)*0.9
-            # label = torch.where(label == 0, zero, label)
-            # label = torch.where(label == 1, one, label)
-
         cls_score = torch.cat([
             all_probs[:, :self.num_background].sum(dim=1, keepdim=True),
             all_probs[:, self.num_background:].sum(dim=1, keepdim=True),
@@ -158,7 +148,6 @@ class HOIMLoss(nn.Module):
             device = self.lut.device
             label = torch.tensor([0]).to(device)  # dummy. useless.
 
-        # import ipdb; ipdb.set_trace()
         projected = oim2cq(inputs, label, self.lut, self.cq, self.cqb, self.cq_omega,
                            self.cqb_omega, self.omega_decay, momentum=self.momentum)
         projected *= self.oim_scalar
@@ -170,32 +159,13 @@ class HOIMLoss(nn.Module):
                 projected)].view(-1, (self.num_background + self.num_pids + self.num_unlabeled))
             projected_non_bg = projected_non_bg[:, self.num_background:]
 
-            # arcface loss
+            # fc loss
             cosa = projected_non_bg / self.oim_scalar
             a = torch.acos(cosa)
-            # m1= 0.9
-            # m2 = 0.1
             top = torch.exp(torch.cos(self.m1 * a + self.m2) * self.oim_scalar)
-            # top = torch.exp(torch.cos(self.m1 * a) * self.oim_scalar)
             _top = torch.exp(torch.cos(a) * self.oim_scalar)
             bottom = torch.sum(torch.exp(cosa * self.oim_scalar), dim=1).view(-1, 1)
             p_i = top / ((bottom - _top + top) + 1e-10)
-
-            #AdaCos feature re-scale
-            # cosa = projected_non_bg / self.oim_scalar
-            # theta = torch.acos(torch.clamp(cosa, -1.0 + 1e-7, 1.0 - 1e-7))
-            # one_hot = torch.zeros_like(cosa)
-            # one_hot.scatter_(1, label.view(-1,1).long(), 1)
-            # with torch.no_grad():
-            #     B_avg = torch.where(one_hot < 1, torch.exp(self.oim_scalar * cosa), torch.zeros_like(cosa))
-            #     B_avg = torch.sum(B_avg) / inputs.size(0)
-            #     # print(B_avg)
-            #     theta_med = torch.median(theta[one_hot == 1])
-            #     self.oim_scalar = torch.log(B_avg) / torch.cos(torch.min(math.pi/4 * torch.ones_like(theta_med), theta_med))
-            # projected_non_bg = self.oim_scalar * cosa
-            
-
-            # p_i = F.softmax(projected_non_bg, dim=1)
             focal_p_i = self.alpha_r * (1 - p_i)**self.gamma_r * p_i.log()
 
             loss_oim = F.nll_loss(focal_p_i, label, reduction='none',
